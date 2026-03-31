@@ -11,8 +11,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/quic-go/quic-go"
+	"github.com/schollz/progressbar/v3"
 )
 
 const (
@@ -79,7 +81,7 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 	}
 
 	fmt.Fprintln(os.Stderr, "Establishing QUIC connection...")
-	qconn, tr, err := dialQUIC(ctx, conn, remoteAddr, tlsConf)
+	qconn, tr, err := dialQUIC(ctx, 15*time.Second, conn, remoteAddr, tlsConf)
 	if f := punchCancel; f != nil {
 		punchCancel = nil
 		f()
@@ -127,7 +129,12 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 	}
 
 	expected := info.Size() - offset
-	written, err := io.Copy(stream, f)
+	bar := progressbar.DefaultBytes(
+		expected,
+		"uploading",
+	)
+
+	written, err := io.Copy(io.MultiWriter(stream, bar), f)
 	if err != nil {
 		return fmt.Errorf("send data: %w", err)
 	}
@@ -336,10 +343,11 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 	fmt.Fprintf(os.Stderr, "Receiving %d bytes -> %s\n", remaining, outPath)
 
 	// Open output
+	var out io.Writer
 	var outFile *os.File
 	var closeOutFile func() error
 	if outPath == "-" {
-		outFile = os.Stdout
+		out = os.Stdout
 	} else {
 		tmpPath := tempFilePath(outPath)
 
@@ -381,12 +389,19 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 				return result, fmt.Errorf("seek temp file: %w", err)
 			}
 		}
+
+		bar := progressbar.DefaultBytes(
+			remaining,
+			"downloading",
+		)
+
+		out = io.MultiWriter(outFile, bar)
 	}
 
-	written, err := io.Copy(outFile, io.LimitReader(stream, remaining))
+	written, err := io.Copy(out, io.LimitReader(stream, remaining))
 	if err != nil || written != remaining {
 		// Record progress for future resume
-		if outPath != "-" {
+		if outFile != nil {
 			if err := outFile.Sync(); err != nil {
 				return result, fmt.Errorf("sync temp file: %w", err)
 			}
@@ -418,6 +433,9 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 	// Wait for sender to close the connection. This ensures the sender has
 	// received our ack before we tear down the connection, avoiding a race
 	// where CONNECTION_CLOSE arrives before the ack byte.
+	//
+	// This also confirms that the sender intends to close responsibly and is
+	// not trying to send more than the number of bytes it said it would.
 	var discard [1]byte
 	if _, err := stream.Read(discard[:]); err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -426,6 +444,31 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 	} else {
 		return result, errors.New("expected sender to close connection after file transfer, but received unexpected data instead")
 	}
+
+	// Now actually wait for the sender to close the connection,
+	// so our ack is delivered before we send CONNECTION_CLOSE.
+	{
+		ctx := qconn.Context()
+		const closeWaitTimeout = 10 * time.Second
+
+		select {
+		case <-ctx.Done():
+			if err := context.Cause(ctx); err != nil {
+				var appErr *quic.ApplicationError
+				if !errors.As(err, &appErr) {
+					return result, fmt.Errorf("secure connection closed due to unexpected error: %w", err)
+				}
+				if appErr.ErrorCode != qErrCodeNoErr {
+					return result, fmt.Errorf("secure connection closed due to unexpected application error: %w", appErr)
+				}
+			}
+
+			// sender closed gracefully after receiving ack
+		case <-time.After(closeWaitTimeout):
+			return result, fmt.Errorf("Warning: failed to confirm transfer ended at expected position: connection not closed gracefully (hung after timeout of %s)", closeWaitTimeout.String())
+		}
+	}
+
 	qErrCode = qErrCodeNoErr
 
 	if f := closeOutFile; f != nil {

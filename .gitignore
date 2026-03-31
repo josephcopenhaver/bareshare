@@ -1,6 +1,7 @@
 /vendor
-bareshare
-main
+/bareshare
+/main
 
 *.bak
-notes.txt
+/notes.txt
+/data.bin

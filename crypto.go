@@ -54,7 +54,14 @@ func loadOrCreateKey() (*ecdsa.PrivateKey, error) {
 		if block == nil {
 			return nil, fmt.Errorf("invalid PEM in %s", path)
 		}
-		return x509.ParseECPrivateKey(block.Bytes)
+
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+
+		fmt.Fprintf(os.Stderr, "Used existing P-384 key pair in %s\n", path)
+		return key, nil
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)

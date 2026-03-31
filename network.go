@@ -17,7 +17,7 @@ import (
 // to the QUIC transport's socket, which quic-go requires exclusive access to.
 // The punch socket is closed when ctx is cancelled.
 func startPunch(ctx context.Context, localPort int, remoteAddr string) error {
-	target, err := net.ResolveUDPAddr("udp4", remoteAddr)
+	target, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
 		return err
 	}
@@ -97,13 +97,13 @@ func listenQUIC(conn *net.UDPConn, tlsConf *tls.Config) (*quic.Listener, *quic.T
 	return ln, tr, nil
 }
 
-func dialQUIC(ctx context.Context, conn *net.UDPConn, remoteAddr string, tlsConf *tls.Config) (*quic.Conn, *quic.Transport, error) {
-	addr, err := net.ResolveUDPAddr("udp4", remoteAddr)
+func dialQUIC(ctx context.Context, timeout time.Duration, conn *net.UDPConn, remoteAddr string, tlsConf *tls.Config) (*quic.Conn, *quic.Transport, error) {
+	addr, err := net.ResolveUDPAddr("udp", remoteAddr)
 	if err != nil {
 		return nil, nil, err
 	}
 	tr := &quic.Transport{Conn: conn}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	qconn, err := tr.Dial(ctx, addr, tlsConf, &quic.Config{
