@@ -9,11 +9,9 @@ import (
 )
 
 type downloadStatus struct {
-	ExpectedSize *int64 `json:"expected_size,omitempty"`
-	BytesWritten *int64 `json:"bytes_written,omitempty"`
+	ExpectedSize     int64 `json:"expected_size"`
+	TooManyBytesSent bool  `json:"too_many_bytes_sent,omitzero"`
 }
-
-func int64Ptr(v int64) *int64 { return &v }
 
 func statusFilePath(outPath string) string {
 	dir := filepath.Dir(outPath)

@@ -51,14 +51,28 @@ func helpFlagInArgs(args ...string) bool {
 }
 
 func main() {
+	ctx := context.Background()
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
 	}
+	k := os.Args[1]
 
-	ctx := context.Background()
+	switch k {
+	case "show-key", "rotate-key", "send", "receive":
+		// do nothing
+	default:
+		usage()
 
-	switch os.Args[1] {
+		if os.Args[1] == "help" || helpFlagInArgs(os.Args[1:]...) {
+			os.Exit(0)
+		}
+
+		os.Exit(1)
+	}
+
+	switch k {
 	case "show-key":
 		cmdShowKey()
 	case "rotate-key":
@@ -68,13 +82,7 @@ func main() {
 	case "receive":
 		cmdReceive(ctx)
 	default:
-		usage()
-
-		if os.Args[1] == "help" || helpFlagInArgs(os.Args[1:]...) {
-			os.Exit(0)
-		}
-
-		os.Exit(1)
+		panic("unreachable")
 	}
 }
 

@@ -177,7 +177,7 @@ func receiveFile(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, o
 }
 
 func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, outPath string, mode os.FileMode, senderAddr string, resume bool) (int64, error) {
-	var result int64
+	var result, expectedSize, offset int64
 
 	// Pre-flight: validate destination before starting any network I/O.
 	if outPath != "-" {
@@ -199,12 +199,33 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 
 		// Check if a previous download already completed but wasn't finalized.
 		if resume {
-			if st, stErr := readStatus(outPath); stErr == nil && st.ExpectedSize != nil && st.BytesWritten != nil && *st.BytesWritten == *st.ExpectedSize {
+			if st, err := readStatus(outPath); err != nil {
+				if !os.IsNotExist(err) {
+					return result, fmt.Errorf("failed to read previous status file: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Warning: no previous transfer status file exists, starting download from beginning\n")
+			} else if st.ExpectedSize == 0 {
+				fmt.Fprintf(os.Stderr, "Warning: status file has no expected file size, starting download from beginning\n")
+			} else if st.TooManyBytesSent {
+				fmt.Fprintf(os.Stderr, "Warning: sender sent too much data last time, starting download from beginning\n")
+			} else {
 				tmpPath := tempFilePath(outPath)
-				if tmpInfo, tmpErr := os.Stat(tmpPath); tmpErr == nil && tmpInfo.Size() == *st.ExpectedSize {
-					fmt.Fprintf(os.Stderr, "Previous download already complete (%d bytes), finalizing...\n", *st.ExpectedSize)
-					result = *st.ExpectedSize
+
+				if tmpInfo, err := os.Stat(tmpPath); err != nil {
+					if os.IsNotExist(err) {
+						return result, fmt.Errorf("failed to stat tmpPath: %w", err)
+					}
+					fmt.Fprintln(os.Stderr, "Warning: No partial data file exists, starting download from beginning")
+				} else if tmpInfo.Size() == st.ExpectedSize {
+					fmt.Fprintf(os.Stderr, "Previous download already complete (%d bytes), finalizing...\n", st.ExpectedSize)
+					result = st.ExpectedSize
 					return result, nil
+				} else if tmpInfo.Size() > st.ExpectedSize {
+					fmt.Fprintln(os.Stderr, "Warning: Previous expected transfer size exceeds existing partial download size, starting download from beginning")
+				} else {
+					offset = tmpInfo.Size()
+					expectedSize = st.ExpectedSize
+					fmt.Fprintf(os.Stderr, "Warning: resuming download from %d of %d if sender agrees\n", offset, expectedSize)
 				}
 			}
 		}
@@ -298,38 +319,9 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 		fileSize = int64(tmp)
 	}
 
-	// Determine resume offset
-	var offset int64
-	if resume {
-		st, stErr := readStatus(outPath)
-		if stErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to read previous status, starting download from beginning: %v\n", stErr)
-		} else if st.ExpectedSize == nil {
-			fmt.Fprintf(os.Stderr, "Warning: status file has no expected file size, starting download from beginning\n")
-		} else if *st.ExpectedSize != fileSize {
-			tmpPath := tempFilePath(outPath)
-			if tmpInfo, tmpErr := os.Stat(tmpPath); tmpErr != nil {
-				if !errors.Is(tmpErr, os.ErrNotExist) {
-					return result, fmt.Errorf("failed to read temp file for resume validation: %w", tmpErr)
-				}
-				fmt.Fprintln(os.Stderr, "Warning: No partial data file exists, starting download from beginning")
-			} else if tmpInfo.Size() > 0 {
-				return result, fmt.Errorf("sender reports file size %d but status file expects %d; aborting to protect existing partial download", fileSize, *st.ExpectedSize)
-			} else {
-				fmt.Fprintf(os.Stderr, "Warning: sender file size %d differs from status file expectation %d but no partial data exists, starting download from beginning\n", fileSize, *st.ExpectedSize)
-			}
-		} else if st.BytesWritten == nil {
-			fmt.Fprintf(os.Stderr, "Warning: status file has no bytes written record, starting download from beginning\n")
-		} else {
-			tmpPath := tempFilePath(outPath)
-			tmpInfo, tmpErr := os.Stat(tmpPath)
-			if tmpErr != nil || tmpInfo.Size() != *st.BytesWritten {
-				fmt.Fprintf(os.Stderr, "Warning: temp file size does not match status file, starting download from beginning\n")
-			} else {
-				offset = *st.BytesWritten
-				fmt.Fprintf(os.Stderr, "Resuming from byte %d of %d\n", offset, fileSize)
-			}
-		}
+	if expectedSize > 0 && fileSize != expectedSize {
+		fmt.Fprintf(os.Stderr, "Warning: sender file size %d differs from status file expectation %d and partial previously downloaded data exists (%d bytes), starting download from beginning\n", fileSize, expectedSize, offset)
+		offset = 0
 	}
 
 	// Send offset to sender
@@ -344,7 +336,6 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 
 	// Open output
 	var out io.Writer
-	var outFile *os.File
 	var closeOutFile func() error
 	if outPath == "-" {
 		out = os.Stdout
@@ -353,8 +344,7 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 
 		// Write status before starting download
 		if err := writeStatus(outPath, downloadStatus{
-			ExpectedSize: int64Ptr(fileSize),
-			BytesWritten: int64Ptr(offset),
+			ExpectedSize: fileSize,
 		}); err != nil {
 			return result, fmt.Errorf("write status: %w", err)
 		}
@@ -366,7 +356,7 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 			openFlags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 		}
 
-		outFile, err = os.OpenFile(tmpPath, openFlags, mode)
+		outFile, err := os.OpenFile(tmpPath, openFlags, mode)
 		if err != nil {
 			if errors.Is(err, os.ErrPermission) {
 				return result, fmt.Errorf("temp file %s is not writable; delete it or make it writable", tmpPath)
@@ -400,18 +390,6 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 
 	written, err := io.Copy(out, io.LimitReader(stream, remaining))
 	if err != nil || written != remaining {
-		// Record progress for future resume
-		if outFile != nil {
-			if err := outFile.Sync(); err != nil {
-				return result, fmt.Errorf("sync temp file: %w", err)
-			}
-			if wsErr := writeStatus(outPath, downloadStatus{
-				ExpectedSize: int64Ptr(fileSize),
-				BytesWritten: int64Ptr(offset + written),
-			}); wsErr != nil {
-				return result, fmt.Errorf("failed to update status file after interrupted transfer: %w", wsErr)
-			}
-		}
 		if err != nil {
 			return result, fmt.Errorf("receive data: %w", err)
 		}
@@ -442,7 +420,19 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 			fmt.Fprintf(os.Stderr, "Warning: file received successfully but failed to read until sender closed connection: %v\n%s\n", err, stopSenderIfStuckAdvice)
 		}
 	} else {
-		return result, errors.New("expected sender to close connection after file transfer, but received unexpected data instead")
+		errs := []error{
+			errors.New("expected sender to close connection after file transfer, but received unexpected data instead"),
+		}
+		if outPath != "-" {
+			if err := writeStatus(outPath, downloadStatus{
+				ExpectedSize:     fileSize,
+				TooManyBytesSent: true,
+			}); err != nil {
+				errs = append(errs, fmt.Errorf("failed to write update to status file: %w", err))
+			}
+		}
+
+		return result, errors.Join(errs...)
 	}
 
 	// Now actually wait for the sender to close the connection,
