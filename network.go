@@ -59,6 +59,9 @@ func serverTLSConfig(key *ecdsa.PrivateKey, expectedPeerFP string) (*tls.Config,
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		ClientAuth:   tls.RequireAnyClientCert,
+		CurvePreferences: []tls.CurveID{
+			tls.X25519MLKEM768, // the only PQ-hybrid Go ships today
+		},
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return verifyPeerFingerprint(rawCerts, expectedPeerFP)
 		},
@@ -76,6 +79,9 @@ func clientTLSConfig(key *ecdsa.PrivateKey, expectedPeerFP string) (*tls.Config,
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
+		CurvePreferences: []tls.CurveID{
+			tls.X25519MLKEM768, // the only PQ-hybrid Go ships today
+		},
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			return verifyPeerFingerprint(rawCerts, expectedPeerFP)
 		},

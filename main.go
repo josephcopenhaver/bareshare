@@ -32,8 +32,9 @@ Modes:
   receive      Listen for an incoming file from a verified peer
 
 Security:
-  - ECDSA P-384 (NIST FIPS 186-5) key pair, stored in ~/.%s/
+  - ECDSA P-384 (NIST FIPS 186-5) key pair for identity, stored in ~/.%s/
   - Mutual TLS 1.3 over QUIC (UDP) with peer fingerprint verification
+  - Key agreement pinned to X25519MLKEM768
   - NAT traversal with bilateral UDP hole punching
 
 `, toolName, cmdName, cmdName, cmdName, cmdName, cmdName)
