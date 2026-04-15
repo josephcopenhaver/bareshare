@@ -49,32 +49,6 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 	}
 	defer conn.Close()
 
-	actualPort := conn.LocalAddr().(*net.UDPAddr).Port
-
-	// Punch on a separate socket sharing the same port via SO_REUSEPORT,
-	// so we don't race with quic-go's exclusive write access.
-	// Only punch when --port was explicitly set for bilateral hole punching.
-	var punchCancel context.CancelFunc
-	if localPort != 0 {
-		fmt.Fprintln(os.Stderr, "Punching NAT...")
-
-		var punchCtx context.Context
-		punchCtx, punchCancel = context.WithCancel(ctx)
-		defer func() {
-			if f := punchCancel; f != nil {
-				punchCancel()
-			}
-		}()
-
-		if err := startPunch(punchCtx, actualPort, remoteAddr); err != nil {
-			fmt.Fprintf(os.Stderr, "Punch socket failed: %v (continuing without punch)\n", err)
-			if f := punchCancel; f != nil {
-				punchCancel = nil
-				f()
-			}
-		}
-	}
-
 	tlsConf, err := clientTLSConfig(key, peerFP)
 	if err != nil {
 		return fmt.Errorf("TLS config: %w", err)
@@ -82,10 +56,6 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 
 	fmt.Fprintln(os.Stderr, "Establishing QUIC connection...")
 	qconn, tr, err := dialQUIC(ctx, 15*time.Second, conn, remoteAddr, tlsConf)
-	if f := punchCancel; f != nil {
-		punchCancel = nil
-		f()
-	}
 	if err != nil {
 		return fmt.Errorf("QUIC dial: %w", err)
 	}
