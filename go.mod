@@ -3,7 +3,7 @@ module github.com/josephcopenhaver/bareshare
 go 1.26
 
 require (
-	github.com/quic-go/quic-go v0.59.0
+	github.com/quic-go/quic-go v0.59.1
 	github.com/schollz/progressbar/v3 v3.19.0
 	golang.org/x/sys v0.42.0
 )
