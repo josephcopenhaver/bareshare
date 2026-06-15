@@ -18,6 +18,7 @@ const (
 func usage() {
 	fmt.Printf(`
 %s - Secure P2P File Transfer
+(%s)
 
 Usage:
   %s show-key
@@ -30,6 +31,7 @@ Modes:
   rotate-key   Generate a new key pair, replacing the existing one
   send         Send a file to a verified peer over QUIC
   receive      Listen for an incoming file from a verified peer
+  version      Prints the version of this command.
 
 Security:
   - ECDSA P-384 (NIST FIPS 186-5) key pair for identity, stored in ~/.%s/
@@ -37,7 +39,7 @@ Security:
   - Key agreement pinned to X25519MLKEM768
   - NAT traversal with bilateral UDP hole punching
 
-`, toolName, cmdName, cmdName, cmdName, cmdName, cmdName)
+`, toolName, version, cmdName, cmdName, cmdName, cmdName, cmdName)
 }
 
 func helpFlagInArgs(args ...string) bool {
@@ -61,7 +63,7 @@ func main() {
 	k := os.Args[1]
 
 	switch k {
-	case "show-key", "rotate-key", "send", "receive":
+	case "show-key", "rotate-key", "send", "receive", "version":
 		// do nothing
 	default:
 		usage()
@@ -82,6 +84,8 @@ func main() {
 		cmdSend(ctx)
 	case "receive":
 		cmdReceive(ctx)
+	case "version":
+		cmdVersion(ctx)
 	default:
 		panic("unreachable")
 	}
@@ -192,4 +196,8 @@ func cmdReceive(ctx context.Context) {
 	if err := receiveFile(ctx, key, *port, *peerKey, *outDir, mode, *senderAddr, *resume); err != nil {
 		panic(fmt.Errorf("receive file: %w", err))
 	}
+}
+
+func cmdVersion(ctx context.Context) {
+	fmt.Fprintf(os.Stdout, "%s\n", version)
 }
