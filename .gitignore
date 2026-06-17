@@ -1,7 +1,12 @@
 /vendor
 /bareshare
 /main
+/build
+/dist
+/bin
 
+.DS_Store
+.bak
 *.bak
 /notes.txt
 /data.bin
