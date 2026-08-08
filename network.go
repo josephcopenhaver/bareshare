@@ -5,26 +5,20 @@ import (
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"net"
 	"time"
 
 	"github.com/quic-go/quic-go"
 )
 
-// startPunch creates a separate UDP socket bound to the same local port
-// (via SO_REUSEPORT) and punches continuously from it. This avoids writing
-// to the QUIC transport's socket, which quic-go requires exclusive access to.
-// The punch socket is closed when ctx is cancelled.
-func startPunch(ctx context.Context, localPort int, remoteAddr string) error {
-	target, err := net.ResolveUDPAddr("udp", remoteAddr)
+// startPunch punches continuously toward remoteAddr from the QUIC
+// transport's own socket via Transport.WriteTo, so the punch shares the
+// port used for the transfer without a second socket. Punching stops when
+// ctx is cancelled.
+func startPunch(ctx context.Context, tr *quic.Transport, network, remoteAddr string) error {
+	target, err := net.ResolveUDPAddr(network, remoteAddr)
 	if err != nil {
 		return err
-	}
-
-	punchConn, err := reuseListenUDP(localPort)
-	if err != nil {
-		return fmt.Errorf("punch socket: %w", err)
 	}
 
 	// First byte must have bits 6 and 7 clear (< 0x40) so quic-go's
@@ -33,7 +27,6 @@ func startPunch(ctx context.Context, localPort int, remoteAddr string) error {
 	payload := []byte{0x07, 'b', 's', 'p', 'u', 'n', 'c', 'h'}
 
 	go func() {
-		defer punchConn.Close()
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -41,7 +34,7 @@ func startPunch(ctx context.Context, localPort int, remoteAddr string) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				punchConn.WriteToUDP(payload, target)
+				tr.WriteTo(payload, target)
 			}
 		}
 	}()
@@ -91,33 +84,23 @@ func clientTLSConfig(key *ecdsa.PrivateKey, expectedPeerFP string) (*tls.Config,
 	}, nil
 }
 
-func listenQUIC(conn *net.UDPConn, tlsConf *tls.Config) (*quic.Listener, *quic.Transport, error) {
-	tr := &quic.Transport{Conn: conn}
-	ln, err := tr.Listen(tlsConf, &quic.Config{
+func listenQUIC(tr *quic.Transport, tlsConf *tls.Config) (*quic.Listener, error) {
+	return tr.Listen(tlsConf, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,
 		KeepAlivePeriod: 10 * time.Second,
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return ln, tr, nil
 }
 
-func dialQUIC(ctx context.Context, timeout time.Duration, conn *net.UDPConn, remoteAddr string, tlsConf *tls.Config) (*quic.Conn, *quic.Transport, error) {
-	addr, err := net.ResolveUDPAddr("udp", remoteAddr)
+func dialQUIC(ctx context.Context, timeout time.Duration, tr *quic.Transport, network, remoteAddr string, tlsConf *tls.Config) (*quic.Conn, error) {
+	addr, err := net.ResolveUDPAddr(network, remoteAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	tr := &quic.Transport{Conn: conn}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	qconn, err := tr.Dial(ctx, addr, tlsConf, &quic.Config{
+	return tr.Dial(ctx, addr, tlsConf, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,
 		KeepAlivePeriod: 10 * time.Second,
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	return qconn, tr, nil
 }

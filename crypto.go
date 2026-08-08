@@ -72,6 +72,9 @@ func loadOrCreateKey() (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
+	if err := secureKeyDir(dir); err != nil {
+		return nil, err
+	}
 
 	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -79,7 +82,7 @@ func loadOrCreateKey() (*ecdsa.PrivateKey, error) {
 	}
 
 	pemData := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(path, pemData, 0600); err != nil {
+	if err := writeKeyFile(path, pemData); err != nil {
 		return nil, err
 	}
 
@@ -111,6 +114,9 @@ func rotateKey() (newKey *ecdsa.PrivateKey, oldFP string, err error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, "", err
 	}
+	if err := secureKeyDir(dir); err != nil {
+		return nil, "", err
+	}
 
 	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -118,7 +124,7 @@ func rotateKey() (newKey *ecdsa.PrivateKey, oldFP string, err error) {
 	}
 
 	pemData := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(path, pemData, 0600); err != nil {
+	if err := writeKeyFile(path, pemData); err != nil {
 		return nil, "", err
 	}
 

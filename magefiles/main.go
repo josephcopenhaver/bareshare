@@ -4,6 +4,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"compress/gzip"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -38,6 +40,16 @@ var targets = []target{
 	{"darwin", "amd64", true},
 	{"linux", "amd64", false},
 	{"linux", "arm64", false},
+	{"windows", "amd64", false},
+	{"windows", "arm64", false},
+}
+
+// binFile is the platform-appropriate binary file name.
+func (t target) binFile() string {
+	if t.goos == "windows" {
+		return binName + ".exe"
+	}
+	return binName
 }
 
 // Dist cross-compiles the redir binary for every release target, then for each
@@ -95,7 +107,7 @@ func buildTarget(t target) error {
 		return err
 	}
 
-	out := filepath.Join(dir, binName)
+	out := filepath.Join(dir, t.binFile())
 	fmt.Printf("building %s/%s -> %s\n", t.goos, t.goarch, out)
 
 	// -buildvcs=false makes more reproducible builds
@@ -115,31 +127,43 @@ func buildTarget(t target) error {
 
 func packageTarget(t target) error {
 	dir := filepath.Join("build", version(), t.goos, t.goarch)
-	binPath := filepath.Join(dir, binName)
+	binFile := t.binFile()
+	binPath := filepath.Join(dir, binFile)
 
 	// digest of the binary, sitting next to it (e.g. build/.../redir.sha256)
 	binSum, err := sha256File(binPath)
 	if err != nil {
 		return err
 	}
-	if err := writeSum(binPath+".sha256", binSum, binName); err != nil {
+	if err := writeSum(binPath+".sha256", binSum, binFile); err != nil {
 		return err
 	}
 
-	// dist/redir-<version>-<os>-<arch...>.tar.gz (path separators become dashes)
+	// dist/redir-<version>-<os>-<arch...>.<ext> (path separators become dashes).
+	// Windows artifacts ship as zip (Explorer-native extraction); everything
+	// else keeps tar.gz.
 	slug := strings.ReplaceAll(version()+"/"+t.goos+"/"+t.goarch, "/", "-")
-	tarName := fmt.Sprintf("%s-%s.tar.gz", binName, slug)
-	tarPath := filepath.Join("dist", tarName)
-	if err := writeTarGz(tarPath, dir, binName, binName+".sha256"); err != nil {
-		return err
+	var arcName, arcPath string
+	if t.goos == "windows" {
+		arcName = fmt.Sprintf("%s-%s.zip", binName, slug)
+		arcPath = filepath.Join("dist", arcName)
+		if err := writeZip(arcPath, dir, binFile, binFile+".sha256"); err != nil {
+			return err
+		}
+	} else {
+		arcName = fmt.Sprintf("%s-%s.tar.gz", binName, slug)
+		arcPath = filepath.Join("dist", arcName)
+		if err := writeTarGz(arcPath, dir, binFile, binFile+".sha256"); err != nil {
+			return err
+		}
 	}
 
-	// digest of the tarball
-	tarSum, err := sha256File(tarPath)
+	// digest of the archive
+	arcSum, err := sha256File(arcPath)
 	if err != nil {
 		return err
 	}
-	return writeSum(tarPath+".sha256", tarSum, tarName)
+	return writeSum(arcPath+".sha256", arcSum, arcName)
 }
 
 // writeSum writes a digest file in GNU coreutils `sha256sum` format:
@@ -191,6 +215,47 @@ func writeTarGz(dest, srcDir string, names ...string) (err error) {
 		return err
 	}
 	return gz.Close()
+}
+
+// writeZip creates dest as a zip archive containing the named files from
+// srcDir, stored under their base names. Entry timestamps are pinned to the
+// zip epoch so archives of identical inputs are byte-identical.
+func writeZip(dest, srcDir string, names ...string) (err error) {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	zw := zip.NewWriter(f)
+	for _, name := range names {
+		hdr := &zip.FileHeader{
+			Name:     name,
+			Method:   zip.Deflate,
+			Modified: time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC),
+		}
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			return err
+		}
+
+		src, err := os.Open(filepath.Join(srcDir, name))
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(w, src); err != nil {
+			src.Close()
+			return err
+		}
+		if err := src.Close(); err != nil {
+			return err
+		}
+	}
+	return zw.Close()
 }
 
 func addFile(tw *tar.Writer, srcDir, name string) error {

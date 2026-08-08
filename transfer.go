@@ -27,8 +27,8 @@ const (
 )
 
 // sendFile orchestrates the full send flow:
-// bind UDP -> hole punch -> QUIC dial -> mutual TLS verify -> stream file
-func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, peerFP string, localPort int) error {
+// bind UDP -> QUIC dial -> mutual TLS verify -> stream file
+func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, peerFP string, localPort int, network string) error {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -43,11 +43,14 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 		return fmt.Errorf("%s is a directory, not a file", filePath)
 	}
 
-	conn, err := reuseListenUDP(localPort)
+	conn, err := net.ListenUDP(network, &net.UDPAddr{Port: localPort})
 	if err != nil {
 		return fmt.Errorf("bind UDP: %w", err)
 	}
 	defer conn.Close()
+
+	tr := &quic.Transport{Conn: conn}
+	defer tr.Close()
 
 	tlsConf, err := clientTLSConfig(key, peerFP)
 	if err != nil {
@@ -55,11 +58,10 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 	}
 
 	fmt.Fprintln(os.Stderr, "Establishing QUIC connection...")
-	qconn, tr, err := dialQUIC(ctx, 15*time.Second, conn, remoteAddr, tlsConf)
+	qconn, err := dialQUIC(ctx, 15*time.Second, tr, network, remoteAddr, tlsConf)
 	if err != nil {
 		return fmt.Errorf("QUIC dial: %w", err)
 	}
-	defer tr.Close()
 	qErrCode := qErrCodeUnknownErr
 	defer func() {
 		qconn.CloseWithError(qErrCode, "")
@@ -133,8 +135,8 @@ func sendFile(ctx context.Context, key *ecdsa.PrivateKey, filePath, remoteAddr, 
 // bind UDP -> QUIC listen -> mutual TLS verify -> receive stream -> save file
 //
 // Invariant: The caller guarantees that the resume flag is only set if the outPath is a file and not stdout.
-func receiveFile(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, outPath string, mode os.FileMode, senderAddr string, resume bool) error {
-	fileSize, err := receiveFileOverNet(ctx, key, port, peerFP, outPath, mode, senderAddr, resume)
+func receiveFile(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, outPath string, mode os.FileMode, senderAddr string, resume bool, network string) error {
+	fileSize, err := receiveFileOverNet(ctx, key, port, peerFP, outPath, mode, senderAddr, resume, network)
 	if err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func receiveFile(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, o
 	return finalizeDownload(outPath, fileSize)
 }
 
-func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, outPath string, mode os.FileMode, senderAddr string, resume bool) (int64, error) {
+func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, peerFP, outPath string, mode os.FileMode, senderAddr string, resume bool, network string) (int64, error) {
 	var result, expectedSize, offset int64
 
 	// Pre-flight: validate destination before starting any network I/O.
@@ -201,7 +203,7 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 		}
 	}
 
-	conn, err := reuseListenUDP(port)
+	conn, err := net.ListenUDP(network, &net.UDPAddr{Port: port})
 	if err != nil {
 		return result, fmt.Errorf("bind UDP port %d: %w", port, err)
 	}
@@ -214,6 +216,9 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 		}
 	}
 
+	tr := &quic.Transport{Conn: conn}
+	defer tr.Close()
+
 	var punchCancel context.CancelFunc
 	if senderAddr != "" {
 		fmt.Fprintf(os.Stderr, "Punching toward sender at %s...\n", senderAddr)
@@ -225,7 +230,7 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 			}
 		}()
 
-		if err := startPunch(punchCtx, port, senderAddr); err != nil {
+		if err := startPunch(punchCtx, tr, network, senderAddr); err != nil {
 			fmt.Fprintf(os.Stderr, "Punch socket failed: %v (continuing without punch)\n", err)
 			if f := punchCancel; f != nil {
 				punchCancel = nil
@@ -241,11 +246,10 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 		return result, fmt.Errorf("TLS config: %w", err)
 	}
 
-	ln, tr, err := listenQUIC(conn, tlsConf)
+	ln, err := listenQUIC(tr, tlsConf)
 	if err != nil {
 		return result, fmt.Errorf("QUIC listen: %w", err)
 	}
-	defer tr.Close()
 	defer ln.Close()
 
 	qconn, err := ln.Accept(ctx)

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 )
 
@@ -23,8 +24,8 @@ func usage() {
 Usage:
   %s show-key
   %s rotate-key
-  %s send    --file <path> --to <host:port> --peer-key <fingerprint> [--port <port>]
-  %s receive --peer-key <fingerprint> [--port <port>] [--out <file>] [--mode <octal>] [--key-file <path|.>] [--resume] [--sender-addr <host:port>]
+  %s send    --file <path> --to <host:port> --peer-key <fingerprint> [--port <port>] [--network <udp4|udp6|udp>]
+  %s receive --peer-key <fingerprint> [--port <port>] [--out <file>] [--mode <octal>] [--key-file <path|.>] [--resume] [--sender-addr <host:port>] [--network <udp4|udp6|udp>]
 
 Modes:
   show-key     Display your public key fingerprint (SHA-256 of SPKI)
@@ -40,6 +41,15 @@ Security:
   - NAT traversal with bilateral UDP hole punching
 
 `, toolName, version, cmdName, cmdName, cmdName, cmdName, cmdName)
+}
+
+// validNetwork verifies the --network flag value before any I/O starts.
+func validNetwork(network string) error {
+	switch network {
+	case "udp4", "udp6", "udp":
+		return nil
+	}
+	return fmt.Errorf("invalid --network %q: must be udp4, udp6, or udp", network)
 }
 
 func helpFlagInArgs(args ...string) bool {
@@ -116,10 +126,14 @@ func cmdSend(ctx context.Context) {
 	to := fs.String("to", "", "Receiver address (host:port)")
 	peerKey := fs.String("peer-key", "", "Expected receiver fingerprint")
 	port := fs.Int("port", 0, "Local UDP port (0 = random, set for bilateral punch)")
+	network := fs.String("network", "udp4", "Bind network: udp4, udp6, or udp (dual-stack)")
 	fs.Parse(os.Args[2:])
 
 	if *filePath == "" || *to == "" || *peerKey == "" {
 		err := errors.New("required: --file, --to, --peer-key")
+		panic(err)
+	}
+	if err := validNetwork(*network); err != nil {
 		panic(err)
 	}
 
@@ -131,7 +145,7 @@ func cmdSend(ctx context.Context) {
 	fmt.Fprintf(os.Stderr, "Your fingerprint: %s\n", fingerprint(&key.PublicKey))
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", *to)
 
-	if err := sendFile(ctx, key, *filePath, *to, *peerKey, *port); err != nil {
+	if err := sendFile(ctx, key, *filePath, *to, *peerKey, *port, *network); err != nil {
 		panic(fmt.Errorf("send file: %w", err))
 	}
 }
@@ -145,10 +159,14 @@ func cmdReceive(ctx context.Context) {
 	keyFile := fs.String("key-file", "", "Key file path (default: ephemeral, '.': user key)")
 	resume := fs.Bool("resume", false, "Resume an interrupted download")
 	senderAddr := fs.String("sender-addr", "", "Sender's public address for bilateral hole punching")
+	network := fs.String("network", "udp4", "Bind network: udp4, udp6, or udp (dual-stack)")
 	fs.Parse(os.Args[2:])
 
 	if *peerKey == "" {
 		err := errors.New("required: --peer-key")
+		panic(err)
+	}
+	if err := validNetwork(*network); err != nil {
 		panic(err)
 	}
 	switch *outDir {
@@ -167,6 +185,14 @@ func cmdReceive(ctx context.Context) {
 		panic(fmt.Errorf("invalid --mode %q: %w", *modeStr, err))
 	}
 	mode := os.FileMode(parsed)
+
+	if runtime.GOOS == "windows" {
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "mode" {
+				fmt.Fprintln(os.Stderr, "Warning: Unix permission modes map to Windows only as a best-effort (read-only attribute); --mode does not restrict access by other users")
+			}
+		})
+	}
 
 	var key *ecdsa.PrivateKey
 	switch *keyFile {
@@ -193,7 +219,7 @@ func cmdReceive(ctx context.Context) {
 
 	fmt.Fprintf(os.Stderr, "Your fingerprint: %s\n", fingerprint(&key.PublicKey))
 
-	if err := receiveFile(ctx, key, *port, *peerKey, *outDir, mode, *senderAddr, *resume); err != nil {
+	if err := receiveFile(ctx, key, *port, *peerKey, *outDir, mode, *senderAddr, *resume, *network); err != nil {
 		panic(fmt.Errorf("receive file: %w", err))
 	}
 }

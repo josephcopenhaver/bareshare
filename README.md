@@ -21,7 +21,7 @@ All traffic travels over QUIC (UDP), which requires TLS 1.3. Session keys are ne
 go install github.com/josephcopenhaver/bareshare@latest
 ```
 
-Requires Go 1.25+. Linux and macOS are supported.
+Requires Go 1.26+. Linux, macOS, and Windows are supported.
 
 ## Quick start
 
@@ -85,7 +85,24 @@ bareshare receive --port 9990 --sender-addr <sender-public-ip:9999> --peer-key <
 bareshare send --port 9999 --to <receiver-public-ip:9990> --peer-key <fp> --file file.tar.gz
 ```
 
-Both sides punch toward each other before the QUIC handshake begins.
+The receiver punches toward the sender before the QUIC handshake begins. The
+punch packets are sent from the same UDP socket QUIC uses, so the NAT mapping
+they open is exactly the one the transfer flows through.
+
+## Network selection
+
+Both `send` and `receive` bind IPv4 (`udp4`) by default. Use `--network` to
+opt into IPv6 or dual-stack operation:
+
+| Value | Behavior |
+|-------|----------|
+| `udp4` _(default)_ | IPv4 only |
+| `udp6` | IPv6 only |
+| `udp` | Dual-stack (IPv4 and IPv6) |
+
+Any other value is rejected at startup. Both peers must be reachable over the
+address family in use; hole punching over IPv6 paths is uncommon since NAT is
+rarely involved.
 
 ## Resuming interrupted transfers
 
@@ -112,12 +129,20 @@ These are removed automatically on successful completion.
 
 The security of a transfer is only as strong as the channel used to exchange fingerprints. Use a channel you trust.
 
+## Windows notes
+
+- The key directory (`%USERPROFILE%\.bareshare`) and `key.pem` are protected with an explicit owner-only ACL (inheritance cut), the Windows equivalent of `0700`/`0600`. The file's ACL is part of the `CreateFile` call itself, so the key never exists on disk without it.
+- Unix permission modes map to Windows only as a best-effort (write bit → read-only attribute). Passing `--mode` on Windows prints a warning; it does not restrict access by other users. Received files get the ACLs their directory grants them.
+- The resume sidecar files (`.name.dl.tmp`, `.name.dl.status.json`) keep their dot-prefixed names but are not hidden by Windows Explorer.
+
 ## Reference
 
 ```
 bareshare show-key
 bareshare rotate-key
 bareshare send    --file <path> --to <host:port> --peer-key <fingerprint> [--port <port>]
+                  [--network <udp4|udp6|udp>]
 bareshare receive --peer-key <fingerprint> [--port <port>] [--out <path>] [--mode <octal>]
                   [--key-file <path|.>] [--resume] [--sender-addr <host:port>]
+                  [--network <udp4|udp6|udp>]
 ```
