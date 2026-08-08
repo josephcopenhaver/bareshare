@@ -9,15 +9,24 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # bash on every OS (Git Bash on windows runners): identical argument
+        # tokenization everywhere; pwsh splits tokens like
+        # -coverprofile=coverage.out at the period.
+        shell: bash
     strategy:
       matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
         go:
           - ver: "1.26"
             name: "1.26"
           - ver: ">=1.26"
             name: "gte-1.26"
-    name: Go ${{ matrix.go.ver }}
+    name: Go ${{ matrix.go.ver }} on ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup go
@@ -25,6 +34,7 @@ jobs:
         with:
           go-version: ${{ matrix.go.ver }}
       - name: verify golang files are consistently formatted and generated
+        if: matrix.os == 'ubuntu-latest'
         run: |
           [ `git status --porcelain=1 | wc -l` -eq 0 ] || (>&2 echo "failed to establish that files were unchanged before running go-generate check" ; exit 1)
           # go generate ./...
@@ -34,10 +44,10 @@ jobs:
           go test ./...
       - name: test with race
         run: |
-          go test -coverprofile=coverage.out -race $(go list ./...)
+          go test -coverprofile=coverage.out -race ./...
           go tool cover -html=coverage.out -o coverage.html
       - name: Upload code coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: code-coverage-report-${{ matrix.go.name }}
+          name: code-coverage-report-${{ matrix.go.name }}-${{ matrix.os }}
           path: coverage.html
