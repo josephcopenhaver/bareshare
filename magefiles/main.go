@@ -118,6 +118,7 @@ func buildTarget(t target) error {
 		"CGO_ENABLED=0",
 		"GOOS="+t.goos,
 		"GOARCH="+t.goarch,
+		"GOFLAGS=-mod=readonly",
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
