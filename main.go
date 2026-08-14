@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -127,11 +126,12 @@ func cmdSend(ctx context.Context) {
 	peerKey := fs.String("peer-key", "", "Expected receiver fingerprint")
 	port := fs.Int("port", 0, "Local UDP port (0 = random, set for bilateral punch)")
 	network := fs.String("network", "udp4", "Bind network: udp4, udp6, or udp (dual-stack)")
+
+	// note: error check not required: using flag.ExitOnError
 	fs.Parse(os.Args[2:])
 
 	if *filePath == "" || *to == "" || *peerKey == "" {
-		err := errors.New("required: --file, --to, --peer-key")
-		panic(err)
+		panic("required: --file, --to, --peer-key")
 	}
 	if err := validNetwork(*network); err != nil {
 		panic(err)
@@ -160,23 +160,22 @@ func cmdReceive(ctx context.Context) {
 	resume := fs.Bool("resume", false, "Resume an interrupted download")
 	senderAddr := fs.String("sender-addr", "", "Sender's public address for bilateral hole punching")
 	network := fs.String("network", "udp4", "Bind network: udp4, udp6, or udp (dual-stack)")
+
+	// note: error check not required: using flag.ExitOnError
 	fs.Parse(os.Args[2:])
 
 	if *peerKey == "" {
-		err := errors.New("required: --peer-key")
-		panic(err)
+		panic("required: --peer-key")
 	}
 	if err := validNetwork(*network); err != nil {
 		panic(err)
 	}
 	switch *outDir {
 	case "":
-		err := errors.New("Output path cannot be empty: invalid value for --out")
-		panic(err)
+		panic("output path cannot be empty: invalid value for --out")
 	case "-":
 		if *resume {
-			err := errors.New("--resume is not supported when output is stdout")
-			panic(err)
+			panic("--resume is not supported when output is stdout")
 		}
 	}
 

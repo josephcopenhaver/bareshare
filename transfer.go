@@ -429,7 +429,11 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 
 			// sender closed gracefully after receiving ack
 		case <-time.After(closeWaitTimeout):
-			return result, fmt.Errorf("Warning: failed to confirm transfer ended at expected position: connection not closed gracefully (hung after timeout of %s)", closeWaitTimeout.String())
+			// note: this should never happen under normal circumstances, if it does then
+			// the network is spotty and we just received the last data packet, but
+			// no session close packet. It's not worth the nuance to support. Treating
+			// it as an error just to be safe.
+			return result, fmt.Errorf("failed to confirm transfer ended at expected position: connection not closed gracefully (hung after timeout of %s)", closeWaitTimeout.String())
 		}
 	}
 
