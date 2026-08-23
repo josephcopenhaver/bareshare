@@ -21,7 +21,7 @@ All traffic travels over QUIC (UDP), which requires TLS 1.3. Session keys are ne
 go install github.com/josephcopenhaver/bareshare@latest
 ```
 
-Requires Go 1.26+. Linux, macOS, and Windows are supported.
+Requires Go 1.27+. Linux, macOS, and Windows are supported.
 
 ## Quick start
 
