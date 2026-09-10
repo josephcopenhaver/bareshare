@@ -222,20 +222,17 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 	var punchCancel context.CancelFunc
 	if senderAddr != "" {
 		fmt.Fprintf(os.Stderr, "Punching toward sender at %s...\n", senderAddr)
-		var punchCtx context.Context
-		punchCtx, punchCancel = context.WithCancel(ctx)
-		defer func() {
-			if f := punchCancel; f != nil {
-				punchCancel()
-			}
-		}()
 
-		if err := startPunch(punchCtx, tr, network, senderAddr); err != nil {
+		if cancel, err := startPunch(ctx, tr, network, senderAddr); err != nil {
 			fmt.Fprintf(os.Stderr, "Punch socket failed: %v (continuing without punch)\n", err)
-			if f := punchCancel; f != nil {
-				punchCancel = nil
-				f()
-			}
+		} else {
+			punchCancel = cancel
+			defer func() {
+				if f := punchCancel; f != nil {
+					punchCancel = nil
+					f()
+				}
+			}()
 		}
 	}
 
@@ -253,13 +250,15 @@ func receiveFileOverNet(ctx context.Context, key *ecdsa.PrivateKey, port int, pe
 	defer ln.Close()
 
 	qconn, err := ln.Accept(ctx)
+	if err != nil {
+		return result, fmt.Errorf("accept connection: %w", err)
+	}
+
 	if f := punchCancel; f != nil {
 		punchCancel = nil
 		f()
 	}
-	if err != nil {
-		return result, fmt.Errorf("accept connection: %w", err)
-	}
+
 	fmt.Fprintln(os.Stderr, "Peer identity verified! Receiving file...")
 
 	qErrCode := qErrCodeUnknownErr
