@@ -120,6 +120,72 @@ These are removed automatically on successful completion.
 
 `--resume` requires a file output path (not stdout).
 
+## Shell completion
+
+```sh
+eval "$(bareshare completion bash)"   # in ~/.bashrc
+. <(bareshare completion zsh)         # in ~/.zshrc, AFTER compinit
+```
+
+The two forms differ on purpose. bash 3.2, which macOS still ships, reads
+nothing when it sources a pipe, so `. <(...)` would silently install nothing
+there; `eval` works in every bash. An interactive zsh, on the other hand, is
+not obliged to treat `#` as a comment inside an `eval`, so the zsh integration
+is sourced instead (and carries no comments at all, for the same reason).
+
+Tab completes the mode at the first position (`send`, `receive`, `show-key`,
+...), each mode's flags after it (a flag already on the line is not offered
+again), files after `--file`, `--out` and `--key-file`, and `udp4`/`udp6`/`udp`
+after `--network`. Both `--network udp4` and `--network=udp4` are understood.
+Under zsh each mode and flag also carries its one-line description. Values only
+you know — addresses, fingerprints, ports, modes — complete to nothing rather
+than to a guess.
+
+Completion never touches the key directory, so a tab press can never create a
+key pair.
+
+### How the shells stay in step
+
+The argument grammar — what may appear at each position — lives once, in Go, in
+`completion.go`. Both scripts are thin adapters over the hidden
+
+```console
+$ bareshare --complete zsh 3 -- bareshare send --network ''
+words
+udp4	IPv4 only (default)
+udp6	IPv6 only
+udp	dual-stack, IPv4 and IPv6
+```
+
+protocol: they hand bareshare the words typed so far and the index of the one
+under the cursor, and translate the directive on the first line (`words`,
+`files`, `none`) into `compgen`/`COMPREPLY` or `_describe`/`_files`.
+Candidates come back unfiltered, so each shell applies its own matching —
+including whatever `zstyle` matcher a zsh user has configured.
+
+A second copy of that grammar written in shell would drift from the first and
+could only be tested through a shell; this way `completionModes` in
+`completion.go` is the single place a new mode or flag has to be declared, and
+a test fails if it and the help menu ever disagree.
+
+### Other shells
+
+Only bash and zsh are implemented. Any other argument (or none) prints a
+source-safe complaint instead of a script and exits non-zero:
+
+```console
+$ eval "$(bareshare completion fish)"; echo $?
+fish not supported
+1
+```
+
+The complaint is `>&2 echo "..." && false` rather than `... && exit 1`
+deliberately: you are evaluating it in your interactive shell, where `exit`
+would close the terminal (or abort the rest of your rc file). `false` still
+leaves `$?` non-zero. The shell name is echoed back only when it is one
+bareshare recognises; anything else reports `unknown shell specified`, so an
+argument can never smuggle text into the eval.
+
 ## Security model
 
 - **Identity:** ECDSA P-384 key pair. Fingerprint is SHA-256 of the SPKI-encoded public key, base64url-encoded.
@@ -145,4 +211,5 @@ bareshare send    --file <path> --to <host:port> --peer-key <fingerprint> [--por
 bareshare receive --peer-key <fingerprint> [--port <port>] [--out <path>] [--mode <octal>]
                   [--key-file <path|.>] [--resume] [--sender-addr <host:port>]
                   [--network <udp4|udp6|udp>]
+bareshare completion <bash|zsh>
 ```

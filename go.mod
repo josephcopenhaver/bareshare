@@ -5,9 +5,9 @@ go 1.27
 toolchain go1.27.0
 
 require (
-	github.com/quic-go/quic-go v0.62.0
+	github.com/quic-go/quic-go v0.64.0
 	github.com/schollz/progressbar/v3 v3.19.1
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
