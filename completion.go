@@ -21,27 +21,41 @@ import (
 
 // completeKind is the answer to "what does the word under the cursor accept?".
 // It is the first line of --complete's output; the adapters switch on it.
-type completeKind string
+type completeKind uint8
+
+const _completeKindEncodedValues = "nonewordsfiles"
 
 const (
-	_ completeKind = ""
+	completeNone completeKind = iota // "none" - nothing can be offered
 
-	completeNone  = "none"  // nothing can be offered
-	completeWords = "words" // the candidate lines that follow
-	completeFiles = "files" // whatever the shell calls a file
+	completeWords // "words" - the candidate lines that follow
+	completeFiles // "files" - whatever the shell calls a file
 )
 
+func (k completeKind) String() string {
+
+	switch k {
+	case completeNone:
+		return _completeKindEncodedValues[:4]
+	case completeWords:
+		return _completeKindEncodedValues[4:9]
+	case completeFiles:
+		return _completeKindEncodedValues[9:]
+	}
+
+	panic("completeKind.String: unknown kind")
+}
+
 // argKind is what one positional argument, or the value of one flag, accepts.
-type argKind int
+type argKind uint8
 
 const (
-	_ argKind = iota - 1
+	argNothing argKind = iota // only the user knows it: an address, a fingerprint, a port
 
-	argNothing // only the user knows it: an address, a fingerprint, a port
-	argBool    // a boolean flag; it takes no value word at all
-	argFile    // a path
-	argChoice  // one of the flag's fixed choices
-	argShell   // a shell name for the completion command
+	argBool   // a boolean flag; it takes no value word at all
+	argFile   // a path
+	argChoice // one of the flag's fixed choices
+	argShell  // a shell name for the completion command
 )
 
 // candidate is one offered word and, for shells that show them, its description.
@@ -191,7 +205,7 @@ func writeComplete(w io.Writer, args []string) error {
 
 	kind, cands := completeAt(words, cword)
 	var out bytes.Buffer
-	out.WriteString(string(kind))
+	out.WriteString(kind.String())
 	out.WriteByte('\n')
 	for _, c := range cands {
 		out.WriteString(c.word)
